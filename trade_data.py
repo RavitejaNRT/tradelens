@@ -1,20 +1,11 @@
-trades = [
-    {
-        "symbol": "RELIANCE",
-        "entry": 500,
-        "stop_loss": 480,
-        "target": 540
-    },
-    {
-        "symbol": "TCS",
-        "entry": 1000,
-        "stop_loss": 960,
-        "target": 1050
-    },
-    {
-        "symbol": "INFY",
-        "entry": 1500,
-        "stop_loss": 1450,
-        "target": 1600
-    }
-]
+import yfinance as yf
+
+
+def get_market_data(symbol):
+    data = yf.download(
+        symbol,
+        period="1y",
+        interval="1d"
+    )
+
+    return data
