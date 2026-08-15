@@ -6,7 +6,16 @@ def calculate_trade(entry_price, stop_loss, target):
     reward_percent = (reward / entry_price) * 100
     risk_reward_ratio = reward / risk
 
-    return risk, reward, risk_percent, reward_percent, risk_reward_ratio
+    return {
+        "entry": entry_price,
+        "stop_loss": stop_loss,
+        "target": target,
+        "risk": risk,
+        "reward": reward,
+        "risk_percent": risk_percent,
+        "reward_percent": reward_percent,
+        "risk_reward_ratio": risk_reward_ratio
+    }
 
 
 entry_price = float(input("Enter entry price: "))
@@ -21,20 +30,18 @@ if target <= entry_price:
     print("Invalid setup: target must be above entry price.")
     exit()
 
-risk, reward, risk_percent, reward_percent, risk_reward_ratio = calculate_trade(
-    entry_price, stop_loss, target
-)
+trade = calculate_trade(entry_price, stop_loss, target)
 
-print("Entry price:", entry_price)
-print("Stop loss:", stop_loss)
-print("Target:", target)
-print("Risk:", risk)
-print("Reward:", reward)
-print("Risk %:", risk_percent)
-print("Reward %:", reward_percent)
-print("Risk/Reward:", risk_reward_ratio)
+print("Entry price:", trade["entry"])
+print("Stop loss:", trade["stop_loss"])
+print("Target:", trade["target"])
+print("Risk:", trade["risk"])
+print("Reward:", trade["reward"])
+print("Risk %:", trade["risk_percent"])
+print("Reward %:", trade["reward_percent"])
+print("Risk/Reward:", trade["risk_reward_ratio"])
 
-if risk_reward_ratio >= 2:
+if trade["risk_reward_ratio"] >= 2:
     print("Trade setup is acceptable")
 else:
     print("Trade setup is rejected")
