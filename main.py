@@ -23,6 +23,14 @@ def analyze_stock(symbol):
 
     near_52_week_high = distance_from_high <= 5
 
+    volume = data["Volume"].iloc[:, 0]
+
+    average_volume_20 = volume.rolling(20).mean()
+
+    latest_volume = volume.iloc[-1]
+
+    volume_pass = latest_volume > (1.5 * average_volume_20.iloc[-1])
+
     trend_pass = (
         close > ema_200
         and close > ema_50
@@ -37,7 +45,10 @@ def analyze_stock(symbol):
     "trend_pass": trend_pass,
     "high_52_week": high_52_week,
     "distance_from_high": distance_from_high,
-    "near_52_week_high": near_52_week_high
+    "near_52_week_high": near_52_week_high,
+    "latest_volume": latest_volume,
+    "average_volume_20": average_volume_20.iloc[-1],
+    "volume_pass": volume_pass
     }
 
 symbols = [
@@ -54,17 +65,23 @@ for symbol in symbols:
 
     trend_pass = result["trend_pass"]
     near_52_week_high = result["near_52_week_high"]
+    volume_pass = result["volume_pass"]
 
-    both_pass = trend_pass and near_52_week_high
+    all_pass = (
+        trend_pass
+        and near_52_week_high
+        and volume_pass
+    )
 
     print(
         result["symbol"],
         "| Trend:", "PASS" if trend_pass else "FAIL",
         "| 52W High:", "PASS" if near_52_week_high else "FAIL",
-        "| Overall:", "PASS" if both_pass else "FAIL"
+        "| Volume:", "PASS" if volume_pass else "FAIL",
+        "| Overall:", "PASS" if all_pass else "FAIL"
     )
 
-    if both_pass:
+    if all_pass:
         passed_count += 1
 
 print()
