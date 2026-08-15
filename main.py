@@ -1,8 +1,17 @@
+from universe import symbols
 from trade_data import get_market_data
 
+def calculate_one_year_return(data):
+    close_prices = data["Close"].iloc[:, 0]
+
+    start_price = close_prices.iloc[0]
+    latest_price = close_prices.iloc[-1]
+
+    return ((latest_price - start_price) / start_price) * 100
 
 def analyze_stock(symbol):
     data = get_market_data(symbol)
+    one_year_return = calculate_one_year_return(data)
 
     close_prices = data["Close"].iloc[:, 0]
 
@@ -48,15 +57,9 @@ def analyze_stock(symbol):
     "near_52_week_high": near_52_week_high,
     "latest_volume": latest_volume,
     "average_volume_20": average_volume_20.iloc[-1],
-    "volume_pass": volume_pass
+    "volume_pass": volume_pass,
+    "one_year_return": one_year_return,
     }
-
-symbols = [
-    "RELIANCE.NS",
-    "TCS.NS",
-    "INFY.NS",
-    "HDFCBANK.NS"
-]
 
 passed_count = 0
 
@@ -78,7 +81,8 @@ for symbol in symbols:
         "| Trend:", "PASS" if trend_pass else "FAIL",
         "| 52W High:", "PASS" if near_52_week_high else "FAIL",
         "| Volume:", "PASS" if volume_pass else "FAIL",
-        "| Overall:", "PASS" if all_pass else "FAIL"
+        "| Overall:", "PASS" if all_pass else "FAIL",
+        "| 1Y Return:", round(result["one_year_return"], 2), "%"
     )
 
     if all_pass:
