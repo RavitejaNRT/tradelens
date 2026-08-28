@@ -1,20 +1,25 @@
 # TradeLens
 
-**Rule-based momentum investing system built around classic, evidence-backed strategies.**
+**Classic 12–1 Momentum — Systematic Nifty 500 Portfolio**
 
-TradeLens is a Python-based research and portfolio-selection project designed to test established quantitative investing strategies without relying on discretionary stock picking, parameter optimization, or overfitting.
+TradeLens is a Python-based systematic investing project built around a simple, rules-based **Classic 12–1 Momentum** strategy.
 
-The first strategy implemented and validated is **Classic 12–1 Price Momentum — Top 30**.
+The project has two primary functions:
+
+1. **Generate the current monthly Top 30 momentum portfolio**
+2. **Validate the strategy through historical backtesting and robustness testing**
+
+The strategy deliberately avoids discretionary stock selection, technical indicators, stop losses, price targets, and parameter optimization.
 
 ---
 
-## Current Strategy
+## Strategy
 
-### Classic 12–1 Price Momentum — Top 30
-
-The strategy ranks stocks based on their **12-month price momentum while excluding the most recent month**.
+TradeLens implements the classic **12–1 momentum** concept.
 
 ### Momentum Formula
+
+For each stock:
 
 ```text
 Momentum = Price[t-1] / Price[t-12] - 1
@@ -24,286 +29,472 @@ Where:
 
 * `t-1` = latest completed month
 * `t-12` = price 12 months before the latest completed month
-* The most recent month is deliberately excluded from the momentum calculation.
+* The most recent incomplete month is excluded
+
+This means the strategy measures approximately **12 months of historical momentum while excluding the most recent month**.
 
 ### Portfolio Rules
 
-| Rule                     | Implementation                         |
-| ------------------------ | -------------------------------------- |
-| Universe                 | Nifty 500                              |
-| Momentum                 | 12-month return excluding latest month |
-| Ranking                  | Cross-sectional                        |
-| Selection                | Top 30 stocks                          |
-| Weighting                | Equal weight                           |
-| Weight per stock         | 3.33%                                  |
-| Rebalance                | Monthly                                |
-| Holding period           | 1 month                                |
-| Stop loss                | None                                   |
-| Target                   | None                                   |
-| RSI                      | None                                   |
-| ATR                      | None                                   |
-| Volume filter            | None                                   |
-| 52-week-high filter      | None                                   |
-| Fundamental filters      | None                                   |
-| Parameter optimization   | None                                   |
-| Feature weights          | None                                   |
-| Hard-filter optimization | None                                   |
+| Rule                   | Implementation        |
+| ---------------------- | --------------------- |
+| Universe               | Nifty 500             |
+| Signal                 | Classic 12–1 momentum |
+| Ranking                | Cross-sectional       |
+| Selection              | Top 30                |
+| Weighting              | Equal weight          |
+| Rebalance              | Monthly               |
+| Holding period         | 1 month               |
+| Stop loss              | None                  |
+| Target                 | None                  |
+| RSI                    | None                  |
+| ATR                    | None                  |
+| Volume filter          | None                  |
+| 52-week-high filter    | None                  |
+| Fundamental filters    | None                  |
+| Parameter optimization | None                  |
+| Discretionary ranking  | None                  |
 
-TradeLens intentionally keeps the strategy close to the classic momentum concept rather than fine-tuning parameters to historical results.
-
----
-
-## How the Monthly Signal Works
-
-The strategy always uses the **latest completed month**.
-
-For example:
-
-### July Portfolio
-
-Run the strategy after the **last trading day of June**.
+Each selected stock receives an equal portfolio weight:
 
 ```text
-June = latest completed month
-June = excluded from momentum
-May = latest month used in the momentum calculation
+1 / 30 = 3.33%
 ```
 
-The resulting Top 30 portfolio is held during July.
-
-If the signal is missed on the month-end, it can be run on the **first trading day of the new month**, provided the previous month is complete.
-
-The current incomplete month is never used.
-
 ---
 
-## Backtesting & Validation
+# Project Components
 
-TradeLens tested the strategy through multiple stages:
+## `main.py`
 
-1. Classic historical backtest
-2. Walk-forward / unseen out-of-sample testing
-3. Portfolio-size comparison
-4. Transaction-cost validation
-5. Drawdown and volatility analysis
-6. Current portfolio signal generation
+`main.py` is the **live portfolio signal engine**.
 
-### Walk-Forward OOS Result
+It:
 
-The fixed strategy was tested using Top 10, Top 20 and Top 30 portfolios.
+1. Refreshes the current Nifty 500 universe
+2. Loads the current stock universe
+3. Downloads historical adjusted price data using `yfinance`
+4. Caches the downloaded data locally
+5. Converts daily prices into month-end prices
+6. Uses only the latest completed month
+7. Calculates 12–1 momentum for every eligible stock
+8. Ranks stocks by momentum
+9. Selects the Top 30
+10. Assigns equal weights
+11. Saves the current portfolio to CSV
 
-The aggregate unseen OOS results were:
-
-| Portfolio  | OOS Trades |   Win Rate | Profit Factor |  Expectancy |
-| ---------- | ---------: | ---------: | ------------: | ----------: |
-| Top 10     |        560 |     53.57% |          1.55 |     0.0248R |
-| Top 20     |      1,120 |     53.93% |          1.50 |     0.0208R |
-| **Top 30** |  **1,680** | **54.82%** |      **1.55** | **0.0216R** |
-
-The Top 30 portfolio produced positive expectancy in **100% of the tested walk-forward folds**.
-
----
-
-## Transaction-Cost Validation
-
-The Top 30 portfolio was tested at different transaction-cost assumptions.
-
-| Transaction Cost |       CAGR | Max Drawdown | Positive Months | Avg. Turnover |
-| ---------------: | ---------: | -----------: | --------------: | ------------: |
-|            0.00% |     23.37% |      -27.84% |          64.29% |        29.35% |
-|            0.10% |     22.94% |      -27.96% |          64.29% |        29.35% |
-|        **0.20%** | **22.52%** |  **-28.07%** |      **64.29%** |    **29.35%** |
-
-The **0.20% transaction-cost scenario** is used as the more conservative reference.
-
-### Interpretation
-
-The historical test suggests that the strategy had a meaningful positive edge even after allowing for transaction costs.
-
-However, these results are **historical simulations, not guaranteed future returns**.
-
----
-
-## What to Expect
-
-This is a **momentum strategy**, so it should not be expected to make money every month or every year.
-
-Expect:
-
-* Periods of strong outperformance
-* Periods of weak performance
-* Negative months
-* Significant drawdowns
-* Portfolio turnover every month
-* Large changes in the selected stocks
-* Occasional concentration in particular sectors or themes
-* Momentum reversals where recent winners fall sharply
-
-The strategy is designed to capture **persistent relative strength over time**, not to predict which stock will rise tomorrow.
-
-The objective is therefore to evaluate performance over **multiple years**, rather than judge the strategy from one month or one calendar year.
-
----
-
-## Important Caveats
-
-### 1. Survivorship Bias
-
-The current implementation uses the **current Nifty 500 universe** rather than historical point-in-time Nifty 500 membership.
-
-Therefore, the backtest is **not fully survivorship-bias-free**.
-
-A future improvement would be to maintain historical Nifty 500 constituent membership for every rebalance date.
-
-### 2. Historical Results Are Not Guarantees
-
-The reported CAGR, drawdown and other statistics describe the tested historical period only.
-
-Future market regimes can behave differently.
-
-### 3. No Guaranteed Monthly Profit
-
-A positive long-term CAGR does not mean every month or every year will be profitable.
-
-### 4. Execution Differences
-
-Backtest prices may differ from actual execution because of:
-
-* Slippage
-* Bid/ask spreads
-* Liquidity
-* Market impact
-* Brokerage and taxes
-* Order timing
-
-### 5. Strategy Is Intentionally Not Optimized
-
-TradeLens does not currently attempt to maximize historical CAGR by continuously changing:
-
-* Momentum periods
-* Portfolio size
-* Filters
-* Stop losses
-* Targets
-* Technical indicators
-* Parameter combinations
-
-This is intentional.
-
-The goal is to reduce the risk of **overfitting the strategy to historical data**.
-
----
-
-## Project Philosophy
-
-TradeLens follows a simple principle:
-
-> **Start with a known strategy → implement it transparently → backtest it → test unseen periods → test costs and robustness → only then consider live implementation.**
-
-The project is designed to avoid turning historical data into a parameter-mining exercise.
-
-A strategy that looks spectacular only after extensive optimization is less interesting than a simple strategy that continues to work when tested on unseen data.
-
----
-
-## Current Live Workflow
-
-At the end of each month:
-
-```text
-1. Download/update market data
-2. Identify the latest completed month
-3. Calculate 12–1 momentum
-4. Rank the Nifty 500 universe
-5. Select the Top 30
-6. Allocate 3.33% to each stock
-7. Hold for the next month
-8. Repeat at the next month-end
-```
-
-The current portfolio is generated by:
-
-```text
-main.py
-```
-
-and saved as:
+### Output
 
 ```text
 current_12_1_top30.csv
 ```
 
+The output contains:
+
+* Rank
+* Symbol
+* Momentum
+* Weight
+* Weight percentage
+* Signal month
+* Holding month
+* Strategy name
+
 ---
 
-## Repository Structure
+# `backtest.py`
+
+`backtest.py` is the **strategy validation and robustness engine**.
+
+It is intentionally separate from the live signal generator.
+
+The backtest tests:
+
+* Top 10 portfolio
+* Top 20 portfolio
+* Top 30 portfolio
+* Top 50 portfolio
+
+It also tests multiple transaction-cost assumptions:
+
+```text
+0.00%
+0.10%
+0.20%
+```
+
+The purpose is not to find the combination with the highest historical return.
+
+The purpose is to determine whether the basic 12–1 momentum idea remains reasonably robust when:
+
+* Portfolio size changes
+* Transaction costs are introduced
+* Performance is examined year by year
+* Out-of-sample performance is examined
+* Drawdowns and volatility are considered
+* Portfolio turnover is measured
+
+---
+
+## Backtest Methodology
+
+### Monthly Rebalancing
+
+At each rebalance date, the strategy:
+
+1. Looks only at information available through the previous completed month
+2. Calculates 12–1 momentum
+3. Ranks the available stocks
+4. Selects the Top N
+5. Holds the portfolio for the following month
+
+No future prices are used to generate the signal.
+
+---
+
+## Portfolio Sizes Tested
+
+The validation engine tests:
+
+```text
+Top 10
+Top 20
+Top 30
+Top 50
+```
+
+This helps determine whether the strategy's performance depends heavily on selecting a particular number of stocks.
+
+---
+
+## Transaction Costs
+
+The backtest tests:
+
+```text
+0.00%
+0.10%
+0.20%
+```
+
+Transaction costs are applied according to estimated portfolio turnover.
+
+The 0.20% case is used as the conservative reference case in the final summary.
+
+These are assumptions for validation rather than a claim about the exact trading cost that will occur in live trading.
+
+---
+
+# Performance Metrics
+
+The backtest reports:
+
+### CAGR
+
+Compound annual growth rate of the portfolio.
+
+### Volatility
+
+Annualized volatility calculated from monthly returns.
+
+### Maximum Drawdown
+
+The largest decline from a previous portfolio equity peak.
+
+### Positive Months
+
+Percentage of months producing a positive net return.
+
+### Best Month
+
+Highest monthly net return.
+
+### Worst Month
+
+Lowest monthly net return.
+
+### Turnover
+
+Estimated proportion of the portfolio that changes during each rebalance.
+
+### Transaction Cost
+
+Estimated cost associated with portfolio turnover.
+
+---
+
+# Yearly Analysis
+
+The backtest also generates year-by-year results.
+
+For each year it records:
+
+* Gross return
+* Net return
+* Average turnover
+* Number of months tested
+
+Output:
+
+```text
+12_1_validation_yearly.csv
+```
+
+This makes it possible to examine whether the strategy's performance was concentrated in only a small number of years.
+
+---
+
+# Out-of-Sample Validation
+
+The validation engine separates the test chronologically.
+
+The current implementation uses:
+
+```text
+Training period : 2018–2021
+OOS period      : 2022 onward
+```
+
+Importantly, **no strategy parameters are selected from the training period**.
+
+The separation is therefore primarily chronological rather than a conventional parameter-training exercise.
+
+The reported OOS results are intended to provide a more conservative assessment than simply reporting the entire historical period.
+
+---
+
+# Important Survivorship-Bias Limitation
+
+The current implementation does **not** provide a completely survivorship-bias-free backtest.
+
+`universe.py` represents the **current Nifty 500 universe**.
+
+Historical Nifty 500 membership is not reconstructed for every historical rebalance date.
+
+Therefore, the backtest cannot fully answer:
+
+> "What would this strategy have achieved using only the stocks that were actually members of the Nifty 500 at each historical point in time?"
+
+Instead, the current test uses the available current universe consistently across the historical period.
+
+This is an important limitation.
+
+A true point-in-time Nifty 500 backtest would require historical index membership for every rebalance date.
+
+Therefore:
+
+> **The backtest should not be described as completely survivorship-bias-free.**
+
+---
+
+# Why the Strategy Is Intentionally Simple
+
+TradeLens does not currently attempt to combine momentum with numerous additional filters.
+
+There are deliberately:
+
+* No RSI filters
+* No ATR filters
+* No volume filters
+* No moving-average filters
+* No fundamental filters
+* No stop losses
+* No profit targets
+* No discretionary ranking
+* No feature weighting
+* No parameter optimization
+
+The objective is to test whether the basic **12–1 momentum signal itself** has sufficient robustness.
+
+Adding many filters can improve historical results while simultaneously increasing the risk of overfitting.
+
+---
+
+# Data
+
+Market data is obtained using:
+
+```text
+yfinance
+```
+
+The system downloads historical adjusted price data beginning from:
+
+```text
+2018-01-01
+```
+
+Daily prices are converted into month-end observations for the momentum calculation.
+
+---
+
+# Data Cache
+
+`main.py` stores downloaded market data locally:
+
+```text
+tradelens_market_cache_12_1.pkl
+```
+
+This allows subsequent executions to reuse the cached data rather than downloading it again, provided the cache is usable.
+
+---
+
+# Universe
+
+The stock universe is maintained through:
+
+```text
+universe.py
+```
+
+The current implementation refreshes the Nifty 500 universe through:
+
+```text
+trade_data.py
+```
+
+before loading the symbols.
+
+The exact historical membership of the Nifty 500 is **not currently reconstructed by the backtest**.
+
+---
+
+# Project Structure
 
 ```text
 TradeLens/
 │
 ├── main.py
 ├── backtest.py
+├── trade_data.py
 ├── universe.py
 ├── README.md
+├── PROJECT_DOCUMENTATION.md
+├── .gitignore
 │
-├── docs/
-│   └── PROJECT_DOCUMENTATION.md
-│
+├── tradelens_market_cache_12_1.pkl
 ├── current_12_1_top30.csv
 │
-└── .gitignore
+├── 12_1_validation_results.csv
+├── 12_1_validation_yearly.csv
+└── 12_1_validation_trades.csv
 ```
 
-Additional backtest output files may be generated during research and validation.
+Generated data files may not exist until the corresponding scripts have been executed.
 
 ---
 
-## Roadmap
+# Running TradeLens
 
-### Completed
+Activate the virtual environment:
 
-* [x] Project setup
-* [x] Nifty 500 universe
-* [x] Market-data pipeline
-* [x] Classic 12–1 momentum calculation
-* [x] Monthly portfolio construction
-* [x] Top 10 / 20 / 30 / 50 comparison
-* [x] Walk-forward OOS testing
-* [x] Transaction-cost validation
-* [x] Current Top 30 signal generation
+```powershell
+.venv\Scripts\Activate.ps1
+```
 
-### Next
+## Generate Current Top 30 Portfolio
 
-* [ ] Production-quality monthly signal workflow
-* [ ] Portfolio tracking
-* [ ] Trade/holding history
-* [ ] Performance monitoring
-* [ ] Risk monitoring
-* [ ] Historical point-in-time universe
-* [ ] Research and validation of additional classic quantitative strategies
+Run:
 
----
+```powershell
+python main.py
+```
 
-## Disclaimer
+The program calculates the latest completed month's momentum and generates:
 
-TradeLens is a **research and educational software project**.
+```text
+current_12_1_top30.csv
+```
 
-Backtested performance does not guarantee future results. The project is not investment advice, and actual investment decisions should consider risk tolerance, taxes, transaction costs, liquidity and changing market conditions.
+The portfolio is intended for the month following the signal month.
 
 ---
 
-## Strategy Status
+# Run the Backtest
 
-**Current production strategy:**
+Run:
 
-### Classic 12–1 Momentum — Top 30
+```powershell
+python backtest.py
+```
 
-**Status: Validated for further live monitoring.**
+The program tests:
 
-The strategy is intentionally kept simple, transparent and rules-based.
+```text
+Top 10
+Top 20
+Top 30
+Top 50
+```
 
-**No optimization.
-No prediction model.
-No discretionary stock selection.
-No stop loss.
-No target.
-Monthly rebalance.**
+under:
+
+```text
+0.00%
+0.10%
+0.20%
+```
+
+transaction-cost assumptions.
+
+It generates:
+
+```text
+12_1_validation_results.csv
+12_1_validation_yearly.csv
+12_1_validation_trades.csv
+```
+
+---
+
+# Validation Philosophy
+
+TradeLens follows a deliberately conservative validation philosophy.
+
+The system should answer:
+
+> **Does a simple, predefined 12–1 momentum strategy remain reasonably robust across portfolio sizes, transaction costs, time periods and out-of-sample data?**
+
+It should **not** answer:
+
+> "Which parameters produce the highest historical CAGR?"
+
+No parameters are optimized by the validation engine.
+
+The objective is to reduce the temptation to repeatedly modify the strategy until the historical backtest looks attractive.
+
+---
+
+# Current Strategy Status
+
+The strategy is currently **frozen**.
+
+Current live configuration:
+
+```text
+Universe       : Nifty 500
+Strategy       : Classic 12–1 Momentum
+Portfolio      : Top 30
+Weight         : Equal weight
+Rebalance      : Monthly
+Holding        : 1 month
+Stop loss      : None
+Target         : None
+Optimization   : None
+```
+
+The backtest deliberately tests alternative portfolio sizes to evaluate robustness, but the live implementation remains **Top 30**.
+
+---
+
+# Important Disclaimer
+
+TradeLens is a research and portfolio-analysis project.
+
+Historical backtest performance does not guarantee future returns.
+
+The current backtest has a known survivorship-bias limitation because historical Nifty 500 membership is not reconstructed.
+
+Transaction costs, taxes, slippage, liquidity constraints and execution differences may cause live results to differ from backtest results.
+
+The output should therefore be treated as systematic research information rather than a guarantee of investment performance.
