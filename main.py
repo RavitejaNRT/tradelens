@@ -4,7 +4,7 @@ CLASSIC 12–1 MOMENTUM — TOP 30
 LIVE MONTHLY PORTFOLIO SIGNAL
 
 Strategy:
-    Universe       : Nifty 500
+    Universe       : Latest Nifty 500
     Momentum       : 12-month return excluding latest month
     Formula        : Price[t-1] / Price[t-12] - 1
     Ranking        : Cross-sectional
@@ -17,6 +17,15 @@ Strategy:
     Optimization   : None
 
 IMPORTANT:
+    The latest Nifty 500 universe is refreshed on every run.
+
+    The market-data cache is NOT treated as the universe.
+
+    Existing cached price data is reused where possible.
+    Newly added Nifty 500 constituents are downloaded automatically.
+    Stocks no longer in the current Nifty 500 are excluded from
+    the portfolio calculation.
+
     Only the latest COMPLETED month is used.
     The current incomplete month is excluded.
 
@@ -28,14 +37,14 @@ import os
 import time
 import pickle
 import warnings
-from datetime import datetime
 
 import pandas as pd
 import yfinance as yf
 
 from trade_data import refresh_nifty500_universe
 
-# Refresh Nifty 500 membership BEFORE importing symbols
+
+# Refresh the latest Nifty 500 universe BEFORE importing symbols.
 refresh_nifty500_universe()
 
 from universe import symbols
@@ -68,128 +77,327 @@ def print_header(title):
 
 
 # ================================================================
-# LOAD MARKET DATA
+# NORMALIZE SYMBOLS
 # ================================================================
 
-def download_market_data(symbol_list):
+def normalize_symbol(symbol):
     """
-    Download sufficient historical data to calculate
-    12–1 momentum.
+    Normalize an NSE symbol for yfinance.
 
-    We use monthly adjusted close prices.
-
-    Failed/delisted symbols are skipped safely.
+    Examples:
+        RELIANCE      -> RELIANCE.NS
+        RELIANCE.NS   -> RELIANCE.NS
     """
 
-    print_header("DOWNLOADING MARKET DATA")
+    symbol = str(symbol).strip().upper()
 
-    print(f"Required history : {START_DATE}")
-    print(f"Symbols          : {len(symbol_list)}")
-    print()
+    if not symbol:
+        return None
+
+    if not symbol.endswith(".NS"):
+        symbol += ".NS"
+
+    return symbol
+
+
+def normalize_universe(symbol_list):
+    """
+    Normalize and deduplicate the current Nifty 500 universe.
+    """
+
+    normalized = []
+
+    for symbol in symbol_list:
+
+        symbol = normalize_symbol(symbol)
+
+        if symbol:
+            normalized.append(symbol)
+
+    return list(dict.fromkeys(normalized))
+
+
+# ================================================================
+# LOAD / REFRESH MARKET DATA
+# ================================================================
+
+def download_symbol_data(symbol):
+    """
+    Download historical adjusted closing prices for one symbol.
+
+    Returns:
+        pandas Series or None
+    """
+
+    try:
+
+        data = yf.download(
+            symbol,
+            start=START_DATE,
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )
+
+        if data is None or data.empty:
+            return None
+
+        # Handle yfinance MultiIndex columns.
+        if isinstance(data.columns, pd.MultiIndex):
+
+            if "Close" not in data.columns.get_level_values(0):
+                return None
+
+            close = data["Close"]
+
+            if isinstance(close, pd.DataFrame):
+
+                if close.shape[1] == 0:
+                    return None
+
+                close = close.iloc[:, 0]
+
+        else:
+
+            if "Close" not in data.columns:
+                return None
+
+            close = data["Close"]
+
+        close = pd.to_numeric(
+            close,
+            errors="coerce"
+        ).dropna()
+
+        if len(close) < 260:
+            return None
+
+        close.index = pd.to_datetime(close.index)
+
+        return close
+
+    except Exception:
+        return None
+
+
+def load_or_refresh_market_data(current_symbols):
+    """
+    Reconcile the market-data cache with the latest Nifty 500 universe.
+
+    The cache is a PRICE-DATA CACHE only.
+
+    It is NOT treated as the stock universe.
+
+    Process:
+
+        1. Load existing cache if available.
+        2. Identify current Nifty 500 constituents missing from cache.
+        3. Download only missing constituents.
+        4. Keep only current Nifty 500 constituents for the
+           returned portfolio dataset.
+        5. Save the complete cache.
+
+    Existing cached data for stocks that have left the Nifty 500
+    may remain in the physical cache file, but those stocks are
+    excluded from the returned dataset.
+    """
+
+    print_header("MARKET DATA / CACHE RECONCILIATION")
+
+    print(
+        f"Current Nifty 500 symbols : "
+        f"{len(current_symbols)}"
+    )
 
     cache = {}
 
-    total = len(symbol_list)
-
-    for i, symbol in enumerate(symbol_list, start=1):
-
-        try:
-            data = yf.download(
-                symbol,
-                start=START_DATE,
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-            )
-
-            if data is None or data.empty:
-                continue
-
-            # Handle yfinance MultiIndex columns.
-            if isinstance(data.columns, pd.MultiIndex):
-
-                if "Close" in data.columns.get_level_values(0):
-                    close = data["Close"]
-
-                    if isinstance(close, pd.DataFrame):
-                        close = close.iloc[:, 0]
-
-                else:
-                    continue
-
-            else:
-
-                if "Close" not in data.columns:
-                    continue
-
-                close = data["Close"]
-
-            close = pd.to_numeric(
-                close,
-                errors="coerce"
-            ).dropna()
-
-            if len(close) < 260:
-                continue
-
-            cache[symbol] = close
-
-        except Exception:
-            continue
-
-        if i % 25 == 0 or i == total:
-            print(
-                f"Downloaded {i}/{total} | "
-                f"usable {len(cache)}"
-            )
-
-    print()
-    print(f"Requested symbols : {len(symbol_list)}")
-    print(f"Usable symbols    : {len(cache)}")
-
-    if len(cache) < 50:
-        raise RuntimeError(
-            "Insufficient usable market data."
-        )
-
-    with open(CACHE_FILE, "wb") as f:
-        pickle.dump(cache, f)
-
-    print()
-    print(f"Saved cache       : {CACHE_FILE}")
-
-    return cache
-
-
-# ================================================================
-# LOAD CACHE OR DOWNLOAD
-# ================================================================
-
-def load_market_data():
+    # ------------------------------------------------------------
+    # LOAD EXISTING CACHE
+    # ------------------------------------------------------------
 
     if os.path.exists(CACHE_FILE):
 
         try:
 
-            print()
-            print("Loading cached market data...")
+            print(
+                f"Loading existing cache : "
+                f"{CACHE_FILE}"
+            )
 
             with open(CACHE_FILE, "rb") as f:
-                cache = pickle.load(f)
+                loaded_cache = pickle.load(f)
 
-            if isinstance(cache, dict) and len(cache) >= 50:
+            if isinstance(loaded_cache, dict):
+
+                for symbol, close in loaded_cache.items():
+
+                    normalized = normalize_symbol(symbol)
+
+                    if (
+                        normalized
+                        and isinstance(close, pd.Series)
+                    ):
+
+                        cache[normalized] = close
+
+            print(
+                f"Cached symbols          : "
+                f"{len(cache)}"
+            )
+
+        except Exception as error:
+
+            print(
+                "Existing cache could not be loaded."
+            )
+
+            print(
+                f"Reason                  : "
+                f"{error}"
+            )
+
+            cache = {}
+
+    else:
+
+        print(
+            "No existing cache found."
+        )
+
+    # ------------------------------------------------------------
+    # FIND MISSING CURRENT CONSTITUENTS
+    # ------------------------------------------------------------
+
+    current_set = set(current_symbols)
+    cached_set = set(cache.keys())
+
+    missing_symbols = sorted(
+        current_set - cached_set
+    )
+
+    removed_symbols = sorted(
+        cached_set - current_set
+    )
+
+    print()
+    print(
+        f"Cached current constituents : "
+        f"{len(current_set & cached_set)}"
+    )
+
+    print(
+        f"New / missing constituents  : "
+        f"{len(missing_symbols)}"
+    )
+
+    print(
+        f"No longer in Nifty 500      : "
+        f"{len(removed_symbols)}"
+    )
+
+    # ------------------------------------------------------------
+    # DOWNLOAD ONLY MISSING CURRENT CONSTITUENTS
+    # ------------------------------------------------------------
+
+    if missing_symbols:
+
+        print()
+        print(
+            "DOWNLOADING NEW / MISSING "
+            "NIFTY 500 CONSTITUENTS"
+        )
+        print()
+
+        total = len(missing_symbols)
+        downloaded = 0
+        failed = 0
+
+        for i, symbol in enumerate(
+            missing_symbols,
+            start=1
+        ):
+
+            close = download_symbol_data(
+                symbol
+            )
+
+            if close is not None:
+
+                cache[symbol] = close
+                downloaded += 1
+
+            else:
+
+                failed += 1
+
+            if (
+                i % 25 == 0
+                or i == total
+            ):
 
                 print(
-                    f"Cached usable symbols : "
-                    f"{len(cache)}"
+                    f"Processed {i}/{total} | "
+                    f"downloaded {downloaded} | "
+                    f"failed {failed}"
                 )
 
-                return cache
+    else:
 
-        except Exception:
-            pass
+        print()
+        print(
+            "No new Nifty 500 constituents "
+            "require downloading."
+        )
 
-    return download_market_data(symbols)
+    # ------------------------------------------------------------
+    # SAVE COMPLETE PRICE CACHE
+    # ------------------------------------------------------------
+
+    with open(CACHE_FILE, "wb") as f:
+
+        pickle.dump(
+            cache,
+            f
+        )
+
+    print()
+    print(
+        f"Saved cache              : "
+        f"{CACHE_FILE}"
+    )
+
+    print(
+        f"Total cached symbols     : "
+        f"{len(cache)}"
+    )
+
+    # ------------------------------------------------------------
+    # CRITICAL:
+    # RETURN ONLY CURRENT NIFTY 500
+    # ------------------------------------------------------------
+
+    current_cache = {}
+
+    for symbol in current_symbols:
+
+        if symbol in cache:
+
+            current_cache[symbol] = cache[symbol]
+
+    print()
+    print(
+        f"Current universe with data : "
+        f"{len(current_cache)}"
+    )
+
+    if len(current_cache) < 50:
+
+        raise RuntimeError(
+            "Insufficient usable market data "
+            "for the current Nifty 500 universe."
+        )
+
+    return current_cache
 
 
 # ================================================================
@@ -220,7 +428,10 @@ def build_monthly_prices(cache):
                 "ME"
             ).last()
 
-            monthly_close = monthly_close.dropna()
+            monthly_close = (
+                monthly_close
+                .dropna()
+            )
 
             if len(monthly_close) >= MONTHS_REQUIRED:
 
@@ -234,16 +445,27 @@ def build_monthly_prices(cache):
     prices = prices.sort_index()
 
     print(
-        f"Monthly observations : {len(prices)}"
+        f"Monthly observations : "
+        f"{len(prices)}"
     )
 
     print(
-        f"Usable symbols       : {len(prices.columns)}"
+        f"Usable symbols       : "
+        f"{len(prices.columns)}"
     )
 
     if len(prices) < MONTHS_REQUIRED:
+
         raise RuntimeError(
             "Insufficient monthly history."
+        )
+
+    if len(prices.columns) < TOP_N:
+
+        raise RuntimeError(
+            f"Only {len(prices.columns)} stocks have "
+            f"sufficient monthly history. "
+            f"Need at least {TOP_N}."
         )
 
     return prices
@@ -269,53 +491,67 @@ def calculate_momentum(prices):
     """
 
     print()
-    print("Calculating classic 12–1 momentum...")
+    print(
+        "Calculating classic 12–1 momentum..."
+    )
 
-    # Use only completed month-end observations.
+    # ------------------------------------------------------------
+    # EXCLUDE CURRENT INCOMPLETE MONTH
+    # ------------------------------------------------------------
+
     today = pd.Timestamp.today().normalize()
 
     last_completed_month = (
-        today.to_period("M").to_timestamp("M")
+        today
+        .to_period("M")
+        .to_timestamp("M")
     )
 
-    # If the last index represents the current month,
-    # remove it because it is incomplete.
     prices = prices[
         prices.index <= last_completed_month
     ]
 
     if len(prices) < MONTHS_REQUIRED:
+
         raise RuntimeError(
             "Insufficient completed monthly history."
         )
 
-    # The latest row is the latest completed month.
-    latest_completed = prices.index[-1]
-
-    # 12–1:
-    #
-    # Price at latest completed month
-    # divided by
-    # Price 12 months before that.
-    #
-    # Since latest month itself must be excluded,
-    # use the previous completed month as numerator.
+    # ------------------------------------------------------------
+    # SIGNAL MONTH
+    # ------------------------------------------------------------
 
     if len(prices) < 13:
+
         raise RuntimeError(
             "Need at least 13 monthly observations."
         )
+
+    # Latest completed month is prices.index[-1].
+    #
+    # Exclude it from the momentum calculation.
+    #
+    # Therefore:
+    #
+    # signal month   = latest completed month - 1
+    # lookback month = signal month - 12 months
 
     signal_month = prices.index[-2]
 
     lookback_month = prices.index[-13]
 
-    latest_prices = prices.loc[signal_month]
+    latest_prices = prices.loc[
+        signal_month
+    ]
 
-    old_prices = prices.loc[lookback_month]
+    old_prices = prices.loc[
+        lookback_month
+    ]
 
     momentum = (
-        latest_prices / old_prices
+        latest_prices
+        /
+        old_prices
     ) - 1.0
 
     momentum = momentum.replace(
@@ -339,7 +575,9 @@ def calculate_momentum(prices):
         ascending=False
     )
 
-    result = result.reset_index(drop=True)
+    result = result.reset_index(
+        drop=True
+    )
 
     print()
     print(
@@ -353,7 +591,8 @@ def calculate_momentum(prices):
     )
 
     print(
-        f"Eligible stocks   : {len(result)}"
+        f"Eligible stocks   : "
+        f"{len(result)}"
     )
 
     return result, signal_month
@@ -372,7 +611,9 @@ def select_top_30(momentum_df):
             f"Need at least {TOP_N}."
         )
 
-    selected = momentum_df.head(TOP_N).copy()
+    selected = momentum_df.head(
+        TOP_N
+    ).copy()
 
     selected["rank"] = range(
         1,
@@ -436,7 +677,8 @@ def display_portfolio(
     )
 
     print(
-        f"Stocks selected   : {TOP_N}"
+        f"Stocks selected   : "
+        f"{TOP_N}"
     )
 
     print(
@@ -462,6 +704,17 @@ def display_portfolio(
 
     print()
     print("IMPORTANT:")
+
+    print(
+        "Latest Nifty 500 universe was "
+        "refreshed before processing."
+    )
+
+    print(
+        "Only current Nifty 500 constituents "
+        "were used."
+    )
+
     print(
         "Only the latest COMPLETED month "
         "was used."
@@ -581,17 +834,27 @@ def main():
         "Hard filters   : NONE"
     )
 
+    # ------------------------------------------------------------
+    # CURRENT NIFTY 500 UNIVERSE
+    # ------------------------------------------------------------
+
+    current_symbols = normalize_universe(
+        symbols
+    )
+
     print()
     print(
-        f"Nifty 500 symbols loaded from "
-        f"universe.py: {len(symbols)}"
+        f"Latest Nifty 500 symbols : "
+        f"{len(current_symbols)}"
     )
 
     # ------------------------------------------------------------
-    # DATA
+    # MARKET DATA / CACHE
     # ------------------------------------------------------------
 
-    cache = load_market_data()
+    cache = load_or_refresh_market_data(
+        current_symbols
+    )
 
     # ------------------------------------------------------------
     # MONTHLY PRICES
@@ -639,7 +902,10 @@ def main():
     # COMPLETE
     # ------------------------------------------------------------
 
-    runtime = time.time() - start_time
+    runtime = (
+        time.time()
+        - start_time
+    )
 
     print_header(
         "12–1 MOMENTUM SIGNAL COMPLETE"
@@ -652,6 +918,16 @@ def main():
     print()
     print(
         "Strategy is FROZEN."
+    )
+
+    print(
+        "Latest Nifty 500 universe "
+        "refreshed before processing."
+    )
+
+    print(
+        "Cache reconciled with current "
+        "Nifty 500 constituents."
     )
 
     print(
