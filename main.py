@@ -29,6 +29,14 @@ IMPORTANT:
     Only the latest COMPLETED month is used.
     The current incomplete month is excluded.
 
+NEW:
+    Top 30 stocks now include:
+        - Sector
+        - Industry
+
+    Sector / industry metadata is cached separately so that
+    repeated runs do not repeatedly query Yahoo Finance.
+
 Output:
     current_12_1_top30.csv
 """
@@ -62,6 +70,11 @@ CACHE_FILE = "tradelens_market_cache_12_1.pkl"
 
 OUTPUT_FILE = "current_12_1_top30.csv"
 
+# Separate metadata cache.
+METADATA_CACHE_FILE = (
+    "tradelens_sector_industry_cache.pkl"
+)
+
 MONTHS_REQUIRED = 13
 
 # EMA breadth periods
@@ -73,10 +86,11 @@ EMA_PERIODS = [20, 50, 200]
 # ================================================================
 
 def print_header(title):
+
     print()
-    print("=" * 64)
+    print("=" * 120)
     print(title)
-    print("=" * 64)
+    print("=" * 120)
 
 
 # ================================================================
@@ -121,6 +135,282 @@ def normalize_universe(symbol_list):
 
 
 # ================================================================
+# SECTOR / INDUSTRY METADATA
+# ================================================================
+
+def load_metadata_cache():
+    """
+    Load previously saved sector / industry metadata.
+
+    Returns:
+        dict
+    """
+
+    metadata_cache = {}
+
+    if not os.path.exists(
+        METADATA_CACHE_FILE
+    ):
+
+        return metadata_cache
+
+    try:
+
+        with open(
+            METADATA_CACHE_FILE,
+            "rb"
+        ) as f:
+
+            loaded = pickle.load(f)
+
+        if isinstance(
+            loaded,
+            dict
+        ):
+
+            metadata_cache = loaded
+
+    except Exception as error:
+
+        print()
+        print(
+            "Sector / industry metadata cache "
+            "could not be loaded."
+        )
+
+        print(
+            f"Reason : {error}"
+        )
+
+        metadata_cache = {}
+
+    return metadata_cache
+
+
+def save_metadata_cache(
+    metadata_cache
+):
+    """
+    Save sector / industry metadata.
+    """
+
+    try:
+
+        with open(
+            METADATA_CACHE_FILE,
+            "wb"
+        ) as f:
+
+            pickle.dump(
+                metadata_cache,
+                f
+            )
+
+    except Exception as error:
+
+        print()
+        print(
+            "Warning: Could not save "
+            "sector / industry metadata cache."
+        )
+
+        print(
+            f"Reason : {error}"
+        )
+
+
+def get_sector_industry(
+    symbol,
+    metadata_cache
+):
+    """
+    Get sector and industry for one stock.
+
+    Existing metadata is reused from cache.
+
+    Yahoo Finance is queried only when the symbol
+    is not already present in the metadata cache.
+
+    Returns:
+        sector, industry
+    """
+
+    symbol = normalize_symbol(
+        symbol
+    )
+
+    # ------------------------------------------------------------
+    # USE EXISTING CACHE
+    # ------------------------------------------------------------
+
+    if symbol in metadata_cache:
+
+        cached = metadata_cache[
+            symbol
+        ]
+
+        if isinstance(
+            cached,
+            dict
+        ):
+
+            sector = cached.get(
+                "sector",
+                "Unknown"
+            )
+
+            industry = cached.get(
+                "industry",
+                "Unknown"
+            )
+
+            return (
+                sector or "Unknown",
+                industry or "Unknown"
+            )
+
+    # ------------------------------------------------------------
+    # QUERY YAHOO FINANCE
+    # ------------------------------------------------------------
+
+    try:
+
+        ticker = yf.Ticker(
+            symbol
+        )
+
+        info = ticker.get_info()
+
+        sector = info.get(
+            "sector",
+            "Unknown"
+        )
+
+        industry = info.get(
+            "industry",
+            "Unknown"
+        )
+
+        sector = (
+            str(sector).strip()
+            if sector
+            else "Unknown"
+        )
+
+        industry = (
+            str(industry).strip()
+            if industry
+            else "Unknown"
+        )
+
+    except Exception:
+
+        sector = "Unknown"
+        industry = "Unknown"
+
+    # ------------------------------------------------------------
+    # SAVE IN MEMORY CACHE
+    # ------------------------------------------------------------
+
+    metadata_cache[
+        symbol
+    ] = {
+        "sector": sector,
+        "industry": industry,
+    }
+
+    return (
+        sector,
+        industry
+    )
+
+
+def add_sector_industry(
+    selected
+):
+    """
+    Add sector and industry information to the
+    already-selected Top 30 stocks.
+
+    IMPORTANT:
+        This happens AFTER momentum ranking and selection.
+
+        Therefore sector / industry metadata has NO
+        effect on the strategy or stock selection.
+    """
+
+    print_header(
+        "ADDING SECTOR / INDUSTRY INFORMATION"
+    )
+
+    metadata_cache = load_metadata_cache()
+
+    print(
+        f"Metadata cache entries : "
+        f"{len(metadata_cache)}"
+    )
+
+    new_metadata = 0
+
+    sectors = []
+    industries = []
+
+    for _, row in selected.iterrows():
+
+        symbol = row["symbol"]
+
+        existed_before = (
+            symbol in metadata_cache
+        )
+
+        sector, industry = (
+            get_sector_industry(
+                symbol,
+                metadata_cache
+            )
+        )
+
+        if not existed_before:
+            new_metadata += 1
+
+        sectors.append(
+            sector
+        )
+
+        industries.append(
+            industry
+        )
+
+    selected = selected.copy()
+
+    selected["sector"] = sectors
+
+    selected["industry"] = industries
+
+    save_metadata_cache(
+        metadata_cache
+    )
+
+    print()
+    print(
+        f"New metadata fetched : "
+        f"{new_metadata}"
+    )
+
+    print(
+        f"Metadata cache total : "
+        f"{len(metadata_cache)}"
+    )
+
+    print(
+        f"Saved metadata cache : "
+        f"{METADATA_CACHE_FILE}"
+    )
+
+    return selected
+
+
+# ================================================================
 # LOAD / REFRESH MARKET DATA
 # ================================================================
 
@@ -146,14 +436,24 @@ def download_symbol_data(symbol):
             return None
 
         # Handle yfinance MultiIndex columns.
-        if isinstance(data.columns, pd.MultiIndex):
+        if isinstance(
+            data.columns,
+            pd.MultiIndex
+        ):
 
-            if "Close" not in data.columns.get_level_values(0):
+            if (
+                "Close"
+                not in data.columns.get_level_values(0)
+            ):
+
                 return None
 
             close = data["Close"]
 
-            if isinstance(close, pd.DataFrame):
+            if isinstance(
+                close,
+                pd.DataFrame
+            ):
 
                 if close.shape[1] == 0:
                     return None
@@ -175,7 +475,9 @@ def download_symbol_data(symbol):
         if len(close) < 260:
             return None
 
-        close.index = pd.to_datetime(close.index)
+        close.index = pd.to_datetime(
+            close.index
+        )
 
         return close
 
@@ -183,7 +485,9 @@ def download_symbol_data(symbol):
         return None
 
 
-def load_or_refresh_market_data(current_symbols):
+def load_or_refresh_market_data(
+    current_symbols
+):
     """
     Reconcile the market-data cache with the latest Nifty 500 universe.
 
@@ -205,7 +509,9 @@ def load_or_refresh_market_data(current_symbols):
     excluded from the returned dataset.
     """
 
-    print_header("MARKET DATA / CACHE RECONCILIATION")
+    print_header(
+        "MARKET DATA / CACHE RECONCILIATION"
+    )
 
     print(
         f"Current Nifty 500 symbols : "
@@ -218,7 +524,9 @@ def load_or_refresh_market_data(current_symbols):
     # LOAD EXISTING CACHE
     # ------------------------------------------------------------
 
-    if os.path.exists(CACHE_FILE):
+    if os.path.exists(
+        CACHE_FILE
+    ):
 
         try:
 
@@ -227,21 +535,39 @@ def load_or_refresh_market_data(current_symbols):
                 f"{CACHE_FILE}"
             )
 
-            with open(CACHE_FILE, "rb") as f:
-                loaded_cache = pickle.load(f)
+            with open(
+                CACHE_FILE,
+                "rb"
+            ) as f:
 
-            if isinstance(loaded_cache, dict):
+                loaded_cache = pickle.load(
+                    f
+                )
 
-                for symbol, close in loaded_cache.items():
+            if isinstance(
+                loaded_cache,
+                dict
+            ):
 
-                    normalized = normalize_symbol(symbol)
+                for symbol, close in (
+                    loaded_cache.items()
+                ):
+
+                    normalized = normalize_symbol(
+                        symbol
+                    )
 
                     if (
                         normalized
-                        and isinstance(close, pd.Series)
+                        and isinstance(
+                            close,
+                            pd.Series
+                        )
                     ):
 
-                        cache[normalized] = close
+                        cache[
+                            normalized
+                        ] = close
 
             print(
                 f"Cached symbols          : "
@@ -271,8 +597,13 @@ def load_or_refresh_market_data(current_symbols):
     # FIND MISSING CURRENT CONSTITUENTS
     # ------------------------------------------------------------
 
-    current_set = set(current_symbols)
-    cached_set = set(cache.keys())
+    current_set = set(
+        current_symbols
+    )
+
+    cached_set = set(
+        cache.keys()
+    )
 
     missing_symbols = sorted(
         current_set - cached_set
@@ -309,9 +640,13 @@ def load_or_refresh_market_data(current_symbols):
             "DOWNLOADING NEW / MISSING "
             "NIFTY 500 CONSTITUENTS"
         )
+
         print()
 
-        total = len(missing_symbols)
+        total = len(
+            missing_symbols
+        )
+
         downloaded = 0
         failed = 0
 
@@ -326,7 +661,10 @@ def load_or_refresh_market_data(current_symbols):
 
             if close is not None:
 
-                cache[symbol] = close
+                cache[
+                    symbol
+                ] = close
+
                 downloaded += 1
 
             else:
@@ -356,7 +694,10 @@ def load_or_refresh_market_data(current_symbols):
     # SAVE COMPLETE PRICE CACHE
     # ------------------------------------------------------------
 
-    with open(CACHE_FILE, "wb") as f:
+    with open(
+        CACHE_FILE,
+        "wb"
+    ) as f:
 
         pickle.dump(
             cache,
@@ -385,7 +726,9 @@ def load_or_refresh_market_data(current_symbols):
 
         if symbol in cache:
 
-            current_cache[symbol] = cache[symbol]
+            current_cache[
+                symbol
+            ] = cache[symbol]
 
     print()
     print(
@@ -407,10 +750,14 @@ def load_or_refresh_market_data(current_symbols):
 # BUILD MONTHLY PRICE MATRIX
 # ================================================================
 
-def build_monthly_prices(cache):
+def build_monthly_prices(
+    cache
+):
 
     print()
-    print("Building monthly price matrix...")
+    print(
+        "Building monthly price matrix..."
+    )
 
     monthly = {}
 
@@ -427,23 +774,32 @@ def build_monthly_prices(cache):
             series = series.sort_index()
 
             # Month-end price.
-            monthly_close = series.resample(
-                "ME"
-            ).last()
+            monthly_close = (
+                series
+                .resample("ME")
+                .last()
+            )
 
             monthly_close = (
                 monthly_close
                 .dropna()
             )
 
-            if len(monthly_close) >= MONTHS_REQUIRED:
+            if (
+                len(monthly_close)
+                >= MONTHS_REQUIRED
+            ):
 
-                monthly[symbol] = monthly_close
+                monthly[
+                    symbol
+                ] = monthly_close
 
         except Exception:
             continue
 
-    prices = pd.DataFrame(monthly)
+    prices = pd.DataFrame(
+        monthly
+    )
 
     prices = prices.sort_index()
 
@@ -478,8 +834,9 @@ def build_monthly_prices(cache):
 # CALCULATE 12–1 MOMENTUM
 # ================================================================
 
-def calculate_momentum(prices):
-
+def calculate_momentum(
+    prices
+):
     """
     Classic 12–1 momentum:
 
@@ -511,7 +868,8 @@ def calculate_momentum(prices):
     )
 
     prices = prices[
-        prices.index <= last_completed_month
+        prices.index
+        <= last_completed_month
     ]
 
     if len(prices) < MONTHS_REQUIRED:
@@ -529,15 +887,6 @@ def calculate_momentum(prices):
         raise RuntimeError(
             "Need at least 13 monthly observations."
         )
-
-    # Latest completed month is prices.index[-1].
-    #
-    # Exclude it from the momentum calculation.
-    #
-    # Therefore:
-    #
-    # signal month   = latest completed month - 1
-    # lookback month = signal month - 12 months
 
     signal_month = prices.index[-2]
 
@@ -558,7 +907,10 @@ def calculate_momentum(prices):
     ) - 1.0
 
     momentum = momentum.replace(
-        [float("inf"), float("-inf")],
+        [
+            float("inf"),
+            float("-inf")
+        ],
         pd.NA
     )
 
@@ -598,14 +950,19 @@ def calculate_momentum(prices):
         f"{len(result)}"
     )
 
-    return result, signal_month
+    return (
+        result,
+        signal_month
+    )
 
 
 # ================================================================
 # SELECT TOP 30
 # ================================================================
 
-def select_top_30(momentum_df):
+def select_top_30(
+    momentum_df
+):
 
     if len(momentum_df) < TOP_N:
 
@@ -647,19 +1004,46 @@ def display_portfolio(
         "CURRENT 12–1 MOMENTUM TOP 30"
     )
 
+    # ------------------------------------------------------------
+    # DISPLAY COLUMNS
+    # ------------------------------------------------------------
+
+    print(
+        f"{'Rank':>4}  "
+        f"{'Symbol':<20}  "
+        f"{'Sector':<24}  "
+        f"{'Industry':<34}  "
+        f"{'Momentum':>10}  "
+        f"{'Weight':>8}"
+    )
+
+    print(
+        "-" * 120
+    )
+
+    # ------------------------------------------------------------
+    # DISPLAY ROWS
+    # ------------------------------------------------------------
+
     for _, row in selected.iterrows():
 
         print(
-            f"{int(row['rank']):2d}. "
-            f"{row['symbol']:<20} "
-            f"Momentum: "
-            f"{row['momentum'] * 100:8.2f}% "
-            f"Weight: "
-            f"{row['weight_pct']:5.2f}%"
+            f"{int(row['rank']):>4}  "
+            f"{str(row['symbol']):<20}  "
+            f"{str(row['sector']):<24}  "
+            f"{str(row['industry']):<34}  "
+            f"{row['momentum'] * 100:>9.2f}%  "
+            f"{row['weight_pct']:>7.2f}%"
         )
 
-    # The portfolio is held during the month
-    # following the completed signal month.
+    print(
+        "-" * 120
+    )
+
+    # ------------------------------------------------------------
+    # PORTFOLIO IMPLEMENTATION
+    # ------------------------------------------------------------
+
     holding_month = (
         signal_month
         + pd.offsets.MonthEnd(1)
@@ -728,13 +1112,24 @@ def display_portfolio(
         "is excluded."
     )
 
+    print(
+        "Sector and industry are "
+        "display-only metadata."
+    )
+
+    print(
+        "Sector and industry do NOT affect "
+        "ranking or stock selection."
+    )
+
 
 # ================================================================
 # NIFTY 500 EMA MARKET BREADTH
 # ================================================================
 
-def get_latest_data_dates(cache):
-
+def get_latest_data_dates(
+    cache
+):
     """
     Get the latest available market-data date for every
     current Nifty 500 constituent.
@@ -764,8 +1159,12 @@ def get_latest_data_dates(cache):
 
             if not series.empty:
 
-                latest_dates[symbol] = (
-                    series.index[-1].normalize()
+                latest_dates[
+                    symbol
+                ] = (
+                    series
+                    .index[-1]
+                    .normalize()
                 )
 
         except Exception:
@@ -774,8 +1173,9 @@ def get_latest_data_dates(cache):
     return latest_dates
 
 
-def get_breadth_label(percentage):
-
+def get_breadth_label(
+    percentage
+):
     """
     Classify Nifty 500 participation.
 
@@ -798,7 +1198,6 @@ def get_market_breadth_pattern(
     pct_50,
     pct_200
 ):
-
     """
     Describe the relationship between short-, medium-,
     and long-term market participation.
@@ -870,8 +1269,9 @@ def get_market_breadth_pattern(
     )
 
 
-def calculate_nifty500_ema_breadth(cache):
-
+def calculate_nifty500_ema_breadth(
+    cache
+):
     """
     Calculate Nifty 500 participation above 20D/50D/200D EMAs.
 
@@ -967,8 +1367,10 @@ def calculate_nifty500_ema_breadth(cache):
 
     eligible_symbols = [
         symbol
-        for symbol, latest_date in latest_dates.items()
-        if latest_date == latest_market_data_date
+        for symbol, latest_date
+        in latest_dates.items()
+        if latest_date
+        == latest_market_data_date
     ]
 
     valid_count = 0
@@ -985,7 +1387,9 @@ def calculate_nifty500_ema_breadth(cache):
 
         try:
 
-            close = cache[symbol]
+            close = cache[
+                symbol
+            ]
 
             series = close.copy()
 
@@ -1005,7 +1409,8 @@ def calculate_nifty500_ema_breadth(cache):
             # ----------------------------------------------------
 
             data = series[
-                series.index <= latest_market_data_date
+                series.index
+                <= latest_market_data_date
             ]
 
             if data.empty:
@@ -1017,7 +1422,11 @@ def calculate_nifty500_ema_breadth(cache):
 
             # The stock must actually have a closing price
             # on the breadth date.
-            if latest_market_data_date not in data.index:
+            if (
+                latest_market_data_date
+                not in data.index
+            ):
+
                 continue
 
             current_close = float(
@@ -1208,6 +1617,8 @@ def save_portfolio(
         [
             "rank",
             "symbol",
+            "sector",
+            "industry",
             "momentum",
             "weight",
             "weight_pct",
@@ -1215,11 +1626,15 @@ def save_portfolio(
     ].copy()
 
     output["signal_month"] = (
-        signal_month.strftime("%Y-%m")
+        signal_month.strftime(
+            "%Y-%m"
+        )
     )
 
     output["holding_month"] = (
-        holding_month.strftime("%Y-%m")
+        holding_month.strftime(
+            "%Y-%m"
+        )
     )
 
     output["strategy"] = (
@@ -1287,7 +1702,7 @@ def main():
     )
 
     print(
-        "Optimization    : NONE"
+        "Optimization   : NONE"
     )
 
     print(
@@ -1333,7 +1748,9 @@ def main():
     # ------------------------------------------------------------
 
     momentum_df, signal_month = (
-        calculate_momentum(prices)
+        calculate_momentum(
+            prices
+        )
     )
 
     # ------------------------------------------------------------
@@ -1342,6 +1759,18 @@ def main():
 
     selected = select_top_30(
         momentum_df
+    )
+
+    # ------------------------------------------------------------
+    # SECTOR / INDUSTRY
+    #
+    # IMPORTANT:
+    # This happens AFTER Top 30 selection.
+    # It cannot influence ranking or selection.
+    # ------------------------------------------------------------
+
+    selected = add_sector_industry(
+        selected
     )
 
     # ------------------------------------------------------------
@@ -1384,7 +1813,8 @@ def main():
     )
 
     print(
-        f"Runtime : {runtime:.2f} seconds"
+        f"Runtime : "
+        f"{runtime:.2f} seconds"
     )
 
     print()
@@ -1421,6 +1851,11 @@ def main():
     print(
         "Monthly rebalance using "
         "the latest completed month."
+    )
+
+    print(
+        "Sector and industry are "
+        "display-only metadata."
     )
 
     # ------------------------------------------------------------
@@ -1465,10 +1900,13 @@ def main():
 
     print(
         f"Total runtime   : "
-        f"{elapsed_minutes:02d}:{elapsed_remaining_seconds:05.2f}"
+        f"{elapsed_minutes:02d}:"
+        f"{elapsed_remaining_seconds:05.2f}"
     )
 
-    print("=" * 64)
+    print(
+        "=" * 120
+    )
 
 
 # ================================================================
