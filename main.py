@@ -64,6 +64,9 @@ OUTPUT_FILE = "current_12_1_top30.csv"
 
 MONTHS_REQUIRED = 13
 
+# EMA breadth periods
+EMA_PERIODS = [20, 50, 200]
+
 
 # ================================================================
 # DISPLAY
@@ -727,6 +730,467 @@ def display_portfolio(
 
 
 # ================================================================
+# NIFTY 500 EMA MARKET BREADTH
+# ================================================================
+
+def get_latest_data_dates(cache):
+
+    """
+    Get the latest available market-data date for every
+    current Nifty 500 constituent.
+
+    Returns:
+        dict {symbol: latest_date}
+    """
+
+    latest_dates = {}
+
+    for symbol, close in cache.items():
+
+        try:
+
+            series = close.copy()
+
+            series.index = pd.to_datetime(
+                series.index
+            )
+
+            series = series.sort_index()
+
+            series = pd.to_numeric(
+                series,
+                errors="coerce"
+            ).dropna()
+
+            if not series.empty:
+
+                latest_dates[symbol] = (
+                    series.index[-1].normalize()
+                )
+
+        except Exception:
+            continue
+
+    return latest_dates
+
+
+def get_breadth_label(percentage):
+
+    """
+    Classify Nifty 500 participation.
+
+    High    : 70% and above
+    Medium  : 50% to below 70%
+    Low     : below 50%
+    """
+
+    if percentage >= 70.0:
+        return "High"
+
+    if percentage >= 50.0:
+        return "Medium"
+
+    return "Low"
+
+
+def get_market_breadth_pattern(
+    pct_20,
+    pct_50,
+    pct_200
+):
+
+    """
+    Describe the relationship between short-, medium-,
+    and long-term market participation.
+    """
+
+    if (
+        pct_20 < pct_50
+        and pct_50 < pct_200
+    ):
+
+        return (
+            "Short-term participation is weaker than "
+            "medium- and long-term participation."
+        )
+
+    if (
+        pct_20 > pct_50
+        and pct_50 > pct_200
+    ):
+
+        return (
+            "Short-term participation is stronger than "
+            "medium- and long-term participation."
+        )
+
+    if (
+        pct_20 > pct_50
+        and pct_20 > pct_200
+    ):
+
+        return (
+            "Short-term participation is stronger than "
+            "medium- and long-term participation."
+        )
+
+    if (
+        pct_20 < pct_50
+        and pct_20 < pct_200
+    ):
+
+        return (
+            "Short-term participation is weaker than "
+            "medium- and long-term participation."
+        )
+
+    if (
+        pct_20 < pct_50
+        and pct_50 > pct_200
+    ):
+
+        return (
+            "Medium-term participation is strongest, "
+            "while short-term participation remains weaker."
+        )
+
+    if (
+        pct_20 > pct_50
+        and pct_50 < pct_200
+    ):
+
+        return (
+            "Medium-term participation is weakest "
+            "relative to short- and long-term participation."
+        )
+
+    return (
+        "Market participation is mixed across "
+        "short-, medium-, and long-term timeframes."
+    )
+
+
+def calculate_nifty500_ema_breadth(cache):
+
+    """
+    Calculate Nifty 500 participation above 20D/50D/200D EMAs.
+
+    Date handling:
+    - Program run date is reported separately.
+    - The latest available market-data date is the maximum latest date
+      across the Nifty 500 stocks.
+    - Each stock is assigned its own latest available data date.
+    - Stocks whose latest available date is not the overall latest date
+      are excluded from the EMA breadth denominator.
+    - The distribution of stocks by latest available data date is reported
+      so missing/stale market data is visible.
+
+    This is an isolated reporting calculation. It does not modify the existing
+    market/fundamental research dataframe or any existing scoring logic.
+    """
+
+    print_header(
+        "CALCULATING NIFTY 500 EMA MARKET BREADTH"
+    )
+
+    # ------------------------------------------------------------
+    # PROGRAM RUN DATE
+    # ------------------------------------------------------------
+
+    program_run_date = (
+        pd.Timestamp.today()
+        .normalize()
+    )
+
+    # ------------------------------------------------------------
+    # GET EACH STOCK'S LATEST AVAILABLE DATA DATE
+    # ------------------------------------------------------------
+
+    latest_dates = get_latest_data_dates(
+        cache
+    )
+
+    if not latest_dates:
+
+        raise RuntimeError(
+            "No usable market-data dates available "
+            "for EMA breadth calculation."
+        )
+
+    # ------------------------------------------------------------
+    # OVERALL LATEST MARKET-DATA DATE
+    # ------------------------------------------------------------
+
+    latest_market_data_date = max(
+        latest_dates.values()
+    )
+
+    print(
+        f"Program run date: "
+        f"{program_run_date.strftime('%Y-%m-%d')}"
+    )
+
+    print(
+        f"Latest available market-data date: "
+        f"{latest_market_data_date.strftime('%Y-%m-%d')}"
+    )
+
+    # ------------------------------------------------------------
+    # LATEST DATA DISTRIBUTION
+    # ------------------------------------------------------------
+
+    date_counts = (
+        pd.Series(
+            list(latest_dates.values())
+        )
+        .value_counts()
+        .sort_index(
+            ascending=False
+        )
+    )
+
+    print()
+    print(
+        "Latest available data by date:"
+    )
+
+    for date, count in date_counts.items():
+
+        print(
+            f"{date.strftime('%Y-%m-%d')}: "
+            f"{count} stocks"
+        )
+
+    # ------------------------------------------------------------
+    # ONLY STOCKS WITH OVERALL LATEST DATE ARE ELIGIBLE
+    # ------------------------------------------------------------
+
+    eligible_symbols = [
+        symbol
+        for symbol, latest_date in latest_dates.items()
+        if latest_date == latest_market_data_date
+    ]
+
+    valid_count = 0
+
+    above_20 = 0
+    above_50 = 0
+    above_200 = 0
+
+    # ------------------------------------------------------------
+    # CALCULATE EMA BREADTH
+    # ------------------------------------------------------------
+
+    for symbol in eligible_symbols:
+
+        try:
+
+            close = cache[symbol]
+
+            series = close.copy()
+
+            series.index = pd.to_datetime(
+                series.index
+            )
+
+            series = series.sort_index()
+
+            series = pd.to_numeric(
+                series,
+                errors="coerce"
+            ).dropna()
+
+            # ----------------------------------------------------
+            # USE DATA ONLY THROUGH THE OVERALL LATEST DATE
+            # ----------------------------------------------------
+
+            data = series[
+                series.index <= latest_market_data_date
+            ]
+
+            if data.empty:
+                continue
+
+            # Require sufficient history for the longest EMA.
+            if len(data) < 200:
+                continue
+
+            # The stock must actually have a closing price
+            # on the breadth date.
+            if latest_market_data_date not in data.index:
+                continue
+
+            current_close = float(
+                data.loc[
+                    latest_market_data_date
+                ]
+            )
+
+            # ----------------------------------------------------
+            # 20D EMA
+            # ----------------------------------------------------
+
+            ema_20 = (
+                data
+                .ewm(
+                    span=20,
+                    adjust=False,
+                    min_periods=20
+                )
+                .mean()
+                .iloc[-1]
+            )
+
+            # ----------------------------------------------------
+            # 50D EMA
+            # ----------------------------------------------------
+
+            ema_50 = (
+                data
+                .ewm(
+                    span=50,
+                    adjust=False,
+                    min_periods=50
+                )
+                .mean()
+                .iloc[-1]
+            )
+
+            # ----------------------------------------------------
+            # 200D EMA
+            # ----------------------------------------------------
+
+            ema_200 = (
+                data
+                .ewm(
+                    span=200,
+                    adjust=False,
+                    min_periods=200
+                )
+                .mean()
+                .iloc[-1]
+            )
+
+            if (
+                pd.isna(ema_20)
+                or pd.isna(ema_50)
+                or pd.isna(ema_200)
+            ):
+
+                continue
+
+            valid_count += 1
+
+            if current_close > ema_20:
+                above_20 += 1
+
+            if current_close > ema_50:
+                above_50 += 1
+
+            if current_close > ema_200:
+                above_200 += 1
+
+        except Exception:
+            continue
+
+    if valid_count == 0:
+
+        raise RuntimeError(
+            "No valid Nifty 500 stocks available "
+            "for EMA breadth calculation."
+        )
+
+    # ------------------------------------------------------------
+    # CALCULATE PARTICIPATION PERCENTAGES
+    # ------------------------------------------------------------
+
+    pct_20 = (
+        above_20
+        /
+        valid_count
+    ) * 100
+
+    pct_50 = (
+        above_50
+        /
+        valid_count
+    ) * 100
+
+    pct_200 = (
+        above_200
+        /
+        valid_count
+    ) * 100
+
+    # ------------------------------------------------------------
+    # CLASSIFICATION
+    # ------------------------------------------------------------
+
+    label_20 = get_breadth_label(
+        pct_20
+    )
+
+    label_50 = get_breadth_label(
+        pct_50
+    )
+
+    label_200 = get_breadth_label(
+        pct_200
+    )
+
+    # ------------------------------------------------------------
+    # MARKET BREADTH PATTERN
+    # ------------------------------------------------------------
+
+    pattern = get_market_breadth_pattern(
+        pct_20,
+        pct_50,
+        pct_200
+    )
+
+    # ------------------------------------------------------------
+    # DISPLAY FINAL BREADTH
+    # ------------------------------------------------------------
+
+    print()
+    print(
+        f"Breadth date: "
+        f"{latest_market_data_date.strftime('%Y-%m-%d')}"
+    )
+
+    print(
+        f"Valid Nifty 500 stocks: "
+        f"{valid_count}"
+    )
+
+    print(
+        f"Above 20D EMA: "
+        f"{above_20} "
+        f"({pct_20:.2f}%) — "
+        f"{label_20}"
+    )
+
+    print(
+        f"Above 50D EMA: "
+        f"{above_50} "
+        f"({pct_50:.2f}%) — "
+        f"{label_50}"
+    )
+
+    print(
+        f"Above 200D EMA: "
+        f"{above_200} "
+        f"({pct_200:.2f}%) — "
+        f"{label_200}"
+    )
+
+    print(
+        f"Market Breadth Pattern: "
+        f"{pattern}"
+    )
+
+
+# ================================================================
 # SAVE PORTFOLIO
 # ================================================================
 
@@ -890,6 +1354,14 @@ def main():
     )
 
     # ------------------------------------------------------------
+    # NIFTY 500 EMA MARKET BREADTH
+    # ------------------------------------------------------------
+
+    calculate_nifty500_ema_breadth(
+        cache
+    )
+
+    # ------------------------------------------------------------
     # SAVE
     # ------------------------------------------------------------
 
@@ -949,6 +1421,51 @@ def main():
     print(
         "Monthly rebalance using "
         "the latest completed month."
+    )
+
+    # ------------------------------------------------------------
+    # PROGRAM RUNTIME
+    # ------------------------------------------------------------
+
+    print_header(
+        "PROGRAM RUNTIME"
+    )
+
+    end_timestamp = pd.Timestamp.now()
+
+    elapsed_seconds = (
+        time.time()
+        - start_time
+    )
+
+    elapsed_minutes = int(
+        elapsed_seconds // 60
+    )
+
+    elapsed_remaining_seconds = (
+        elapsed_seconds
+        -
+        (elapsed_minutes * 60)
+    )
+
+    print(
+        f"Start timestamp : "
+        f"{pd.Timestamp.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    print(
+        f"End timestamp   : "
+        f"{end_timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    print(
+        f"Elapsed seconds : "
+        f"{elapsed_seconds:.2f}"
+    )
+
+    print(
+        f"Total runtime   : "
+        f"{elapsed_minutes:02d}:{elapsed_remaining_seconds:05.2f}"
     )
 
     print("=" * 64)
