@@ -33,9 +33,14 @@ NEW:
     Top 30 stocks now include:
         - Sector
         - Industry
+        - Price
+        - Market Cap (In Cr)
 
     Sector / industry metadata is cached separately so that
     repeated runs do not repeatedly query Yahoo Finance.
+
+    Market Cap is display-only metadata and does not affect
+    momentum ranking or stock selection.
 
 Output:
     current_12_1_top30.csv
@@ -88,9 +93,9 @@ EMA_PERIODS = [20, 50, 200]
 def print_header(title):
 
     print()
-    print("=" * 120)
+    print("=" * 140)
     print(title)
-    print("=" * 120)
+    print("=" * 140)
 
 
 # ================================================================
@@ -135,7 +140,7 @@ def normalize_universe(symbol_list):
 
 
 # ================================================================
-# SECTOR / INDUSTRY METADATA
+# SECTOR / INDUSTRY / MARKET CAP METADATA
 # ================================================================
 
 def load_metadata_cache():
@@ -325,22 +330,94 @@ def get_sector_industry(
     )
 
 
+def get_market_cap(
+    symbol
+):
+    """
+    Get the current market capitalization for one stock.
+
+    Yahoo Finance marketCap is returned in rupees.
+
+    Conversion:
+
+        Market Cap (In Cr)
+            =
+        marketCap / 10,000,000
+
+    Example:
+
+        50,000,000,000 rupees
+            =
+        5,000 Crores
+
+    Market cap is display-only metadata.
+
+    It does NOT affect:
+        - momentum
+        - ranking
+        - Top 30 selection
+        - portfolio weight
+        - EMA breadth
+    """
+
+    symbol = normalize_symbol(
+        symbol
+    )
+
+    try:
+
+        ticker = yf.Ticker(
+            symbol
+        )
+
+        info = ticker.get_info()
+
+        market_cap = info.get(
+            "marketCap"
+        )
+
+        if (
+            market_cap is None
+            or pd.isna(market_cap)
+        ):
+
+            return None
+
+        market_cap_cr = (
+            float(market_cap)
+            / 10_000_000
+        )
+
+        if (
+            market_cap_cr <= 0
+            or pd.isna(market_cap_cr)
+        ):
+
+            return None
+
+        return market_cap_cr
+
+    except Exception:
+
+        return None
+
+
 def add_sector_industry(
     selected
 ):
     """
-    Add sector and industry information to the
-    already-selected Top 30 stocks.
+    Add sector, industry, price and market-cap information
+    to the already-selected Top 30 stocks.
 
     IMPORTANT:
         This happens AFTER momentum ranking and selection.
 
-        Therefore sector / industry metadata has NO
-        effect on the strategy or stock selection.
+        Therefore sector / industry / price / market cap
+        have NO effect on the strategy or stock selection.
     """
 
     print_header(
-        "ADDING SECTOR / INDUSTRY INFORMATION"
+        "ADDING SECTOR / INDUSTRY / PRICE / MARKET CAP INFORMATION"
     )
 
     metadata_cache = load_metadata_cache()
@@ -354,6 +431,7 @@ def add_sector_industry(
 
     sectors = []
     industries = []
+    market_caps = []
 
     for _, row in selected.iterrows():
 
@@ -370,6 +448,10 @@ def add_sector_industry(
             )
         )
 
+        market_cap_cr = get_market_cap(
+            symbol
+        )
+
         if not existed_before:
             new_metadata += 1
 
@@ -381,11 +463,17 @@ def add_sector_industry(
             industry
         )
 
+        market_caps.append(
+            market_cap_cr
+        )
+
     selected = selected.copy()
 
     selected["sector"] = sectors
 
     selected["industry"] = industries
+
+    selected["market_cap_cr"] = market_caps
 
     save_metadata_cache(
         metadata_cache
@@ -1013,12 +1101,14 @@ def display_portfolio(
         f"{'Symbol':<20}  "
         f"{'Sector':<24}  "
         f"{'Industry':<34}  "
+        f"{'Price':>12}  "
+        f"{'Market Cap (In Cr)':>20}  "
         f"{'Momentum':>10}  "
         f"{'Weight':>8}"
     )
 
     print(
-        "-" * 120
+        "-" * 140
     )
 
     # ------------------------------------------------------------
@@ -1027,17 +1117,53 @@ def display_portfolio(
 
     for _, row in selected.iterrows():
 
+        price = row.get(
+            "price"
+        )
+
+        market_cap_cr = row.get(
+            "market_cap_cr"
+        )
+
+        if (
+            price is None
+            or pd.isna(price)
+        ):
+
+            price_display = "N/A"
+
+        else:
+
+            price_display = (
+                f"{float(price):.2f}"
+            )
+
+        if (
+            market_cap_cr is None
+            or pd.isna(market_cap_cr)
+        ):
+
+            market_cap_display = "N/A"
+
+        else:
+
+            market_cap_display = (
+                f"{float(market_cap_cr):,.2f}"
+            )
+
         print(
             f"{int(row['rank']):>4}  "
             f"{str(row['symbol']):<20}  "
             f"{str(row['sector']):<24}  "
             f"{str(row['industry']):<34}  "
+            f"{price_display:>12}  "
+            f"{market_cap_display:>20}  "
             f"{row['momentum'] * 100:>9.2f}%  "
             f"{row['weight_pct']:>7.2f}%"
         )
 
     print(
-        "-" * 120
+        "-" * 140
     )
 
     # ------------------------------------------------------------
@@ -1113,13 +1239,17 @@ def display_portfolio(
     )
 
     print(
-        "Sector and industry are "
-        "display-only metadata."
+        "Sector, industry, price and market cap "
+        "are display-only metadata."
     )
 
     print(
-        "Sector and industry do NOT affect "
-        "ranking or stock selection."
+        "Market cap is displayed in Crores."
+    )
+
+    print(
+        "Sector, industry, price and market cap "
+        "do NOT affect ranking or stock selection."
     )
 
 
@@ -1619,11 +1749,19 @@ def save_portfolio(
             "symbol",
             "sector",
             "industry",
+            "price",
+            "market_cap_cr",
             "momentum",
             "weight",
             "weight_pct",
         ]
     ].copy()
+
+    output = output.rename(
+        columns={
+            "market_cap_cr": "market_cap_in_cr",
+        }
+    )
 
     output["signal_month"] = (
         signal_month.strftime(
@@ -1762,7 +1900,75 @@ def main():
     )
 
     # ------------------------------------------------------------
-    # SECTOR / INDUSTRY
+    # CURRENT PRICE
+    #
+    # IMPORTANT:
+    # This is display-only information.
+    # It does NOT affect ranking or stock selection.
+    #
+    # Use the latest available price from the existing
+    # market-data cache.
+    # ------------------------------------------------------------
+
+    latest_price_by_symbol = {}
+
+    for symbol in selected["symbol"]:
+
+        try:
+
+            close = cache.get(
+                symbol
+            )
+
+            if close is None or close.empty:
+
+                latest_price_by_symbol[
+                    symbol
+                ] = None
+
+                continue
+
+            series = close.copy()
+
+            series.index = pd.to_datetime(
+                series.index
+            )
+
+            series = series.sort_index()
+
+            series = pd.to_numeric(
+                series,
+                errors="coerce"
+            ).dropna()
+
+            if series.empty:
+
+                latest_price_by_symbol[
+                    symbol
+                ] = None
+
+            else:
+
+                latest_price_by_symbol[
+                    symbol
+                ] = float(
+                    series.iloc[-1]
+                )
+
+        except Exception:
+
+            latest_price_by_symbol[
+                symbol
+            ] = None
+
+    selected["price"] = selected[
+        "symbol"
+    ].map(
+        latest_price_by_symbol
+    )
+
+    # ------------------------------------------------------------
+    # SECTOR / INDUSTRY / MARKET CAP
     #
     # IMPORTANT:
     # This happens AFTER Top 30 selection.
@@ -1854,8 +2060,12 @@ def main():
     )
 
     print(
-        "Sector and industry are "
-        "display-only metadata."
+        "Sector, industry, price and market cap "
+        "are display-only metadata."
+    )
+
+    print(
+        "Market cap is displayed in Crores."
     )
 
     # ------------------------------------------------------------
@@ -1905,7 +2115,7 @@ def main():
     )
 
     print(
-        "=" * 120
+        "=" * 140
     )
 
 
